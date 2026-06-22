@@ -1,0 +1,11 @@
+# Build output
+*.app/
+*.dmg
+*.iconset/
+.build/
+
+# Generated icon (recreated by build.sh from gen-icon.swift)
+ShellDrive.icns
+
+# macOS
+.DS_Store
