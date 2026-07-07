@@ -33,8 +33,17 @@ swiftc -O \
     -framework Carbon \
     -framework ServiceManagement
 
-echo "→ Ad-hoc code signing (stable identity for Accessibility permission)…"
-codesign --force --deep --sign - --identifier com.shelldrive.app "$APP"
+# Sign with a stable self-signed identity if present (so macOS Accessibility /
+# Automation grants persist across rebuilds); otherwise fall back to ad-hoc.
+# Create the identity once with ./setup-signing.sh.
+SIGN_ID="-"
+if security find-certificate -c "Shell Drive Dev" >/dev/null 2>&1; then
+    SIGN_ID="Shell Drive Dev"
+    echo "→ Code signing with stable identity '$SIGN_ID'…"
+else
+    echo "→ Ad-hoc code signing (run ./setup-signing.sh for persistent permissions)…"
+fi
+codesign --force --deep --sign "$SIGN_ID" --identifier com.shelldrive.app "$APP"
 
 echo "✅ Built: $APP"
 echo "   Run with:  open \"$APP\"   (or)   ./\"$APP/Contents/MacOS/$BIN\""

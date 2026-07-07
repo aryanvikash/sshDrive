@@ -9,12 +9,13 @@ struct RootView: View {
     @State private var search = ""
     @State private var page: Page = .commands
     @State private var editorTarget: EditorTarget?
+    @State private var envEditTarget: EnvEditTarget?
     @State private var runTarget: DriveNode?
     @State private var deleteTarget: DriveNode?
     @State private var toast: String?
     @State private var rootDropTargeted = false
 
-    private enum Page { case commands, trash, settings }
+    private enum Page { case commands, env, trash, settings }
 
     var body: some View {
         ZStack {
@@ -23,6 +24,7 @@ struct RootView: View {
             overlays
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: editorTarget != nil)
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: envEditTarget != nil)
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: runTarget != nil)
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: deleteTarget != nil)
     }
@@ -44,8 +46,12 @@ struct RootView: View {
             header
             switch page {
             case .commands: commandsPage
+            case .env:      EnvView(onClose: { page = .commands },
+                                    onAdd: { envEditTarget = .new },
+                                    onEdit: { envEditTarget = .edit($0) },
+                                    onToast: showToast)
             case .trash:    TrashView(onClose: { page = .commands }, onToast: showToast)
-            case .settings: SettingsView(onClose: { page = .commands })
+            case .settings: SettingsView(onClose: { page = .commands }, onToast: showToast)
             }
             footer
         }
@@ -57,6 +63,20 @@ struct RootView: View {
             modalOverlay { editorTarget = nil } content: {
                 NodeEditor(target: target, onClose: { editorTarget = nil }, onCommit: apply)
                     .environmentObject(store)
+            }
+        }
+        if let target = envEditTarget {
+            modalOverlay { envEditTarget = nil } content: {
+                EnvEditorCard(
+                    target: target,
+                    onClose: { envEditTarget = nil },
+                    onDelete: { if case let .edit(variable) = target { store.deleteEnv(variable.id) } }
+                ) { key, value in
+                    switch target {
+                    case .new: store.addEnv(key: key, value: value)
+                    case let .edit(variable): store.updateEnv(variable.id, key: key, value: value)
+                    }
+                }
             }
         }
         if let target = runTarget {
@@ -149,6 +169,15 @@ struct RootView: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Spacer()
+            Button(action: reloadFromDisk) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color.primary.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .help("Reload from disk")
             Menu {
                 Button { editorTarget = .new(parentID: nil, isFolder: false) } label: {
                     Label("New Command", systemImage: "terminal")
@@ -170,17 +199,13 @@ struct RootView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 12) {
-            FooterButton(icon: page == .trash ? "list.bullet" : "trash",
-                         title: page == .trash ? "Commands" : "Trash",
-                         badge: page == .trash ? nil : (store.trash.isEmpty ? nil : store.trash.count),
-                         active: page == .trash) {
-                page = page == .trash ? .commands : .trash
-            }
+        HStack(spacing: 10) {
+            FooterButton(icon: "curlybraces", title: "Env", active: page == .env) { toggle(.env) }
+            FooterButton(icon: "trash", title: "Trash",
+                         badge: store.trash.isEmpty ? nil : store.trash.count,
+                         active: page == .trash) { toggle(.trash) }
             Spacer()
-            FooterButton(icon: "gearshape", active: page == .settings) {
-                page = page == .settings ? .commands : .settings
-            }
+            FooterButton(icon: "gearshape", active: page == .settings) { toggle(.settings) }
             FooterButton(icon: "power") { NSApp.terminate(nil) }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
@@ -188,6 +213,11 @@ struct RootView: View {
         .overlay(alignment: .top) {
             Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 1)
         }
+    }
+
+    /// Navigate to `target`, or back to commands if already there.
+    private func toggle(_ target: Page) {
+        page = (page == target) ? .commands : target
     }
 
     private var searchBar: some View {
@@ -237,6 +267,7 @@ struct RootView: View {
             .overlay(Capsule().stroke(.white.opacity(0.12)))
             .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
             .padding(.bottom, 56)
+            .allowsHitTesting(false)        // never intercept clicks on the footer/list
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
@@ -263,6 +294,10 @@ struct RootView: View {
         deleteTarget = nil
         store.delete(node.id)
         showToast("Moved “\(node.name)” to Trash")
+    }
+
+    private func reloadFromDisk() {
+        showToast(store.reload() ? "Reloaded from disk" : "Couldn't read drive.json")
     }
 
     private func apply(_ result: EditorResult) {
@@ -344,6 +379,10 @@ private struct FooterButton: View {
                 }
             }
             .foregroundStyle(active ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.secondary))
+            // Enlarge the hit target and make the whole rectangle clickable so
+            // taps in the gaps between icon/label/badge still register.
+            .padding(.horizontal, 6).padding(.vertical, 4)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

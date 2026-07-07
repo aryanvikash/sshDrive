@@ -2,7 +2,9 @@ import SwiftUI
 
 /// Settings page: default terminal, launch-at-login, data folder, and about.
 struct SettingsView: View {
+    @EnvironmentObject private var store: DriveStore
     let onClose: () -> Void
+    let onToast: (String) -> Void
 
     @State private var terminalID = TerminalPreference.bundleID
     @State private var launchAtLogin = LoginItem.isEnabled
@@ -38,6 +40,15 @@ struct SettingsView: View {
 
     private var dataSection: some View {
         SettingsSection("DATA") {
+            Button(action: reloadFromDisk) {
+                SettingsRow(icon: "arrow.clockwise", title: "Reload from Disk",
+                            subtitle: "Re-read drive.json after editing it manually") {
+                    EmptyView()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Divider().padding(.leading, 40)
             Button(action: revealDataFolder) {
                 SettingsRow(icon: "folder", title: "Reveal Data Folder",
                             subtitle: AppInfo.dataFolderURL.path) {
@@ -47,6 +58,10 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    private func reloadFromDisk() {
+        onToast(store.reload() ? "Reloaded from disk" : "Couldn't read drive.json")
     }
 
     private var aboutSection: some View {

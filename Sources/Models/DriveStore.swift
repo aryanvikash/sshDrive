@@ -1,17 +1,33 @@
 import Foundation
 import Combine
 
-/// On-disk format: nodes + trash together.
+/// On-disk format: nodes + trash + env vars together. Decodes tolerantly so
+/// files written by older versions (missing newer keys) still load.
 private struct DriveData: Codable {
     var nodes: [DriveNode]
     var trash: [TrashItem]
+    var envVars: [EnvVar]
+
+    init(nodes: [DriveNode], trash: [TrashItem], envVars: [EnvVar]) {
+        self.nodes = nodes
+        self.trash = trash
+        self.envVars = envVars
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        nodes = try c.decodeIfPresent([DriveNode].self, forKey: .nodes) ?? []
+        trash = try c.decodeIfPresent([TrashItem].self, forKey: .trash) ?? []
+        envVars = try c.decodeIfPresent([EnvVar].self, forKey: .envVars) ?? []
+    }
 }
 
-/// The single source of truth for the command tree and recycle bin. Persists to
-/// JSON in Application Support and keeps `~/.zshrc` aliases in sync on every save.
+/// The single source of truth for the command tree, recycle bin, and env vars.
+/// Persists to JSON in Application Support and keeps `~/.zshrc` in sync on save.
 final class DriveStore: ObservableObject {
     @Published private(set) var nodes: [DriveNode] = []
     @Published private(set) var trash: [TrashItem] = []
+    @Published private(set) var envVars: [EnvVar] = []
 
     private let fileURL: URL
 
@@ -30,6 +46,7 @@ final class DriveStore: ObservableObject {
             if let decoded = try? decoder.decode(DriveData.self, from: data) {
                 nodes = decoded.nodes
                 trash = decoded.trash
+                envVars = decoded.envVars
                 return
             }
             if let legacy = try? decoder.decode([DriveNode].self, from: data) {
@@ -42,13 +59,37 @@ final class DriveStore: ObservableObject {
         save()
     }
 
+    /// Re-read the data file from disk (e.g. after a manual edit) and update
+    /// state. Does not overwrite the file. Returns false if it can't be parsed.
+    @discardableResult
+    func reload() -> Bool {
+        guard let data = try? Data(contentsOf: fileURL) else { return false }
+        let decoder = JSONDecoder()
+        if let decoded = try? decoder.decode(DriveData.self, from: data) {
+            nodes = decoded.nodes
+            trash = decoded.trash
+            envVars = decoded.envVars
+        } else if let legacy = try? decoder.decode([DriveNode].self, from: data) {
+            nodes = legacy
+            trash = []
+            envVars = []
+        } else {
+            return false
+        }
+        ShellConfigManager.sync(aliasLines: AliasManager.lines(from: nodes),
+                                envLines: EnvManager.lines(from: envVars))
+        return true
+    }
+
     private func save() {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted]
-        if let data = try? encoder.encode(DriveData(nodes: nodes, trash: trash)) {
+        if let data = try? encoder.encode(DriveData(nodes: nodes, trash: trash, envVars: envVars)) {
             try? data.write(to: fileURL, options: .atomic)
         }
-        AliasManager.sync(nodes)            // trashed items are excluded
+        // Keep ~/.zshrc in sync: aliases (from live commands) + env vars.
+        ShellConfigManager.sync(aliasLines: AliasManager.lines(from: nodes),
+                                envLines: EnvManager.lines(from: envVars))
     }
 
     // MARK: - Tree mutations
@@ -119,6 +160,32 @@ final class DriveStore: ObservableObject {
 
     func emptyTrash() {
         trash.removeAll()
+        save()
+    }
+
+    // MARK: - Environment variables
+
+    @discardableResult
+    func addEnv(key: String, value: String) -> Bool {
+        let key = EnvManager.sanitizeKey(key)
+        guard !key.isEmpty else { return false }
+        envVars.append(EnvVar(key: key, value: value))
+        save()
+        return true
+    }
+
+    @discardableResult
+    func updateEnv(_ id: UUID, key: String, value: String) -> Bool {
+        let key = EnvManager.sanitizeKey(key)
+        guard !key.isEmpty, let index = envVars.firstIndex(where: { $0.id == id }) else { return false }
+        envVars[index].key = key
+        envVars[index].value = value
+        save()
+        return true
+    }
+
+    func deleteEnv(_ id: UUID) {
+        envVars.removeAll { $0.id == id }
         save()
     }
 
